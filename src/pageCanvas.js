@@ -282,12 +282,22 @@ export function makeDedicationCanvas(dedication) {
   heartDivider(ctx, cx, 420)
 
   ctx.fillStyle = PALETTE.ink
-  ctx.font = 'italic 400 44px "Cormorant Garamond"'
-  const lines = wrapText(ctx, dedication.body, PAGE_W - 300)
+  // il corpo si adatta alla lunghezza: carattere più piccolo se il testo cresce
+  let lines = []
+  let lineH = 62
+  let blankH = 34
+  for (const [size, lh, bh] of [[44, 62, 34], [40, 56, 31], [36, 50, 28], [33, 46, 26]]) {
+    ctx.font = `italic 400 ${size}px "Cormorant Garamond"`
+    lines = wrapText(ctx, dedication.body, PAGE_W - 300)
+    lineH = lh
+    blankH = bh
+    const textH = lines.reduce((h, l) => h + (l ? lh : bh), 0)
+    if (550 + textH <= PAGE_H - 250) break
+  }
   let y = 550
   for (const line of lines) {
     if (line) ctx.fillText(line, cx, y)
-    y += line ? 62 : 34
+    y += line ? lineH : blankH
   }
 
   ctx.fillStyle = PALETTE.rosa
@@ -298,6 +308,14 @@ export function makeDedicationCanvas(dedication) {
 }
 
 // ── pagina di un ricordo ──────────────────────────────────────
+// Il layout si adatta alla lunghezza del racconto: testo breve → foto
+// grande in alto; testo medio → foto panoramica; testo lungo → foto
+// più piccola di lato, con il testo che le scorre accanto. Se serve,
+// anche il carattere si riduce gradualmente: niente più righe tagliate.
+
+const MARGIN = 120
+const CONTENT_W = PAGE_W - MARGIN * 2
+const CONTENT_BOTTOM = PAGE_H - 150
 
 function loadImage(src) {
   return new Promise((resolve) => {
@@ -307,6 +325,98 @@ function loadImage(src) {
     img.onerror = () => resolve(null)
     img.src = src
   })
+}
+
+const bodyFont = (px) => `400 ${px}px "Cormorant Garamond"`
+
+// polaroid con ombra, leggera rotazione e ritaglio "cover" della foto
+function drawPolaroid(ctx, img, centerX, topY, photoW, photoH, tilt) {
+  const frameW = photoW + 44
+  const frameH = photoH + 70
+  ctx.save()
+  ctx.translate(centerX, topY + frameH / 2)
+  ctx.rotate(tilt)
+  ctx.shadowColor = 'rgba(60,30,70,0.30)'
+  ctx.shadowBlur = 26
+  ctx.shadowOffsetY = 10
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(-frameW / 2, -frameH / 2, frameW, frameH)
+  ctx.shadowColor = 'transparent'
+  const scale = Math.max(photoW / img.width, photoH / img.height)
+  const sw = photoW / scale
+  const sh = photoH / scale
+  ctx.drawImage(
+    img,
+    (img.width - sw) / 2,
+    (img.height - sh) / 2,
+    sw,
+    sh,
+    -photoW / 2,
+    -frameH / 2 + 22,
+    photoW,
+    photoH
+  )
+  ctx.restore()
+}
+
+// Dispone il racconto riga per riga; widthAt(y) dice quanto è larga la
+// colonna a quell'altezza (più stretta dove di fianco c'è la foto).
+function layoutBody(ctx, text, { font, lineH, startY, bottom, widthAt }) {
+  ctx.font = font
+  const blankH = Math.round(lineH * 0.55)
+  const lines = []
+  let y = startY
+  let overflow = false
+
+  outer: for (const rawLine of text.split('\n')) {
+    if (rawLine.trim() === '') {
+      if (lines.length) y += blankH
+      continue
+    }
+    let col = widthAt(y)
+    let line = ''
+    for (const word of rawLine.split(/\s+/).filter(Boolean)) {
+      const test = line ? line + ' ' + word : word
+      if (line && ctx.measureText(test).width > col.width) {
+        if (y > bottom) {
+          overflow = true
+          break outer
+        }
+        lines.push({ text: line, x: col.x, width: col.width, y })
+        y += lineH
+        col = widthAt(y)
+        line = word
+      } else {
+        line = test
+      }
+    }
+    if (line) {
+      if (y > bottom) {
+        overflow = true
+        break
+      }
+      lines.push({ text: line, x: col.x, width: col.width, y })
+      y += lineH
+    }
+  }
+  return { lines, endY: y, overflow }
+}
+
+function drawBodyLines(ctx, lines, { font, align }) {
+  ctx.font = font
+  ctx.fillStyle = PALETTE.ink
+  ctx.textAlign = align
+  for (const l of lines) {
+    ctx.fillText(l.text, align === 'center' ? l.x + l.width / 2 : l.x, l.y)
+  }
+}
+
+// se nemmeno il layout più compatto basta, il testo chiude con «…»
+function softEllipsis(res) {
+  if (res.overflow && res.lines.length) {
+    const last = res.lines[res.lines.length - 1]
+    last.text = last.text.replace(/[\s.,;:!?·]*$/, '') + '…'
+  }
 }
 
 export async function makeMemoryCanvas(memory, pageNumber) {
@@ -322,9 +432,14 @@ export async function makeMemoryCanvas(memory, pageNumber) {
 
   if (memory.date) {
     ctx.fillStyle = PALETTE.inkSoft
-    ctx.font = '400 34px "Cormorant Garamond"'
     ctx.save()
     ctx.letterSpacing = '8px'
+    let size = 34
+    ctx.font = `400 ${size}px "Cormorant Garamond"`
+    while (size > 26 && ctx.measureText(memory.date.toUpperCase()).width > CONTENT_W + 40) {
+      size -= 2
+      ctx.font = `400 ${size}px "Cormorant Garamond"`
+    }
     ctx.fillText(memory.date.toUpperCase(), cx, y)
     ctx.restore()
     y += 66
@@ -332,64 +447,145 @@ export async function makeMemoryCanvas(memory, pageNumber) {
 
   if (memory.title) {
     ctx.fillStyle = PALETTE.accent
-    ctx.font = '700 82px "Dancing Script"'
-    ctx.fillText(memory.title, cx, y + 26)
-    y += 96
+    // il titolo si restringe (e al limite va a capo) per stare nella pagina
+    let size = 82
+    ctx.font = `700 ${size}px "Dancing Script"`
+    while (size > 56 && ctx.measureText(memory.title).width > CONTENT_W + 40) {
+      size -= 4
+      ctx.font = `700 ${size}px "Dancing Script"`
+    }
+    const titleLines =
+      ctx.measureText(memory.title).width > CONTENT_W + 40
+        ? wrapText(ctx, memory.title, CONTENT_W + 40)
+        : [memory.title]
+    for (const line of titleLines) {
+      ctx.fillText(line, cx, y + Math.round(size * 0.32))
+      y += Math.round(size * 1.17)
+    }
   }
 
   heartDivider(ctx, cx, y + 6)
   y += 64
 
-  // foto in stile polaroid
-  if (memory.imageUrl) {
-    const img = await loadImage(memory.imageUrl)
-    if (img) {
-      const frameW = PAGE_W - 320
-      const photoW = frameW - 44
-      const photoH = Math.min(photoW * 0.75, 520)
-      const frameH = photoH + 44 + 26
-      ctx.save()
-      ctx.translate(cx, y + frameH / 2)
-      ctx.rotate(-0.016)
-      ctx.shadowColor = 'rgba(60,30,70,0.30)'
-      ctx.shadowBlur = 26
-      ctx.shadowOffsetY = 10
-      ctx.fillStyle = '#ffffff'
-      ctx.fillRect(-frameW / 2, -frameH / 2, frameW, frameH)
-      ctx.shadowColor = 'transparent'
-      // ritaglio "cover" dell'immagine dentro la cornice
-      const scale = Math.max(photoW / img.width, photoH / img.height)
-      const sw = photoW / scale
-      const sh = photoH / scale
-      ctx.drawImage(
-        img,
-        (img.width - sw) / 2,
-        (img.height - sh) / 2,
-        sw,
-        sh,
-        -photoW / 2,
-        -frameH / 2 + 22,
-        photoW,
-        photoH
-      )
-      ctx.restore()
-      y += frameH + 60
-    }
-  }
+  const contentTop = y
+  const availH = CONTENT_BOTTOM - contentTop
+  const body = (memory.body || '').trim()
+  const img = memory.imageUrl ? await loadImage(memory.imageUrl) : null
+  const tiltSign = pageNumber % 2 ? -1 : 1
 
-  // racconto
-  if (memory.body) {
-    ctx.fillStyle = PALETTE.ink
-    ctx.font = '400 40px "Cormorant Garamond"'
-    const maxLines = Math.floor((PAGE_H - 150 - y) / 56)
-    const lines = wrapText(ctx, memory.body, PAGE_W - 280).slice(0, Math.max(maxLines, 0))
-    for (const line of lines) {
-      if (line) ctx.fillText(line, cx, y)
-      y += line ? 56 : 30
+  if (img && !body) {
+    // solo foto: una grande polaroid verticale al centro dello spazio
+    const photoW = 620
+    const photoH = Math.max(320, Math.min(availH - 140, 730))
+    const frameH = photoH + 70
+    const top = contentTop + Math.max(0, (availH - frameH - 70) / 2)
+    drawPolaroid(ctx, img, cx, top, photoW, photoH, tiltSign * 0.017)
+    drawHeart(ctx, cx, top + frameH + 68, 15, PALETTE.rosa, 0.5)
+  } else if (img) {
+    // foto + racconto: si prova prima il layout con la foto più grande,
+    // poi via via quelli che lasciano più spazio al testo
+    const layouts = [
+      { kind: 'hero', photoW: 660, photoH: 495, px: 40, lh: 56 },
+      { kind: 'hero', photoW: 560, photoH: 400, px: 40, lh: 56 },
+      { kind: 'banner', photoW: CONTENT_W - 44, photoH: 300, px: 37, lh: 52 },
+      { kind: 'side', photoW: 380, photoH: 385, px: 36, lh: 50 },
+      { kind: 'side', photoW: 300, photoH: 310, px: 34, lh: 48 },
+      { kind: 'side', photoW: 300, photoH: 310, px: 32, lh: 45 },
+    ]
+
+    for (let i = 0; i < layouts.length; i++) {
+      const L = layouts[i]
+      const frameW = L.photoW + 44
+      const frameH = L.photoH + 70
+      const font = bodyFont(L.px)
+      let widthAt, startY, photoTop, photoCx, tilt, align
+
+      if (L.kind === 'side') {
+        // foto di lato (alternando destra e sinistra), testo che le scorre accanto
+        const right = pageNumber % 2 === 1
+        photoTop = contentTop + 6
+        photoCx = right ? PAGE_W - MARGIN - frameW / 2 + 12 : MARGIN + frameW / 2 - 12
+        tilt = (right ? 1 : -1) * 0.026
+        align = 'left'
+        const clear = frameW + 24
+        const narrow = right
+          ? { x: MARGIN, width: CONTENT_W - clear }
+          : { x: MARGIN + clear, width: CONTENT_W - clear }
+        const flowBottom = photoTop + frameH + 46
+        widthAt = (yy) => (yy - L.lh * 0.35 < flowBottom ? narrow : { x: MARGIN, width: CONTENT_W })
+        startY = contentTop + Math.round(L.lh * 0.9)
+      } else {
+        photoTop = contentTop
+        photoCx = cx
+        tilt = tiltSign * (L.kind === 'banner' ? 0.006 : 0.016)
+        align = L.kind === 'banner' ? 'left' : 'center'
+        const textW = L.kind === 'banner' ? CONTENT_W : 744
+        widthAt = () => ({ x: cx - textW / 2, width: textW })
+        startY = photoTop + frameH + (L.kind === 'banner' ? 62 : 70)
+      }
+
+      const res = layoutBody(ctx, body, {
+        font,
+        lineH: L.lh,
+        startY,
+        bottom: CONTENT_BOTTOM,
+        widthAt,
+      })
+      if (res.overflow && i < layouts.length - 1) continue
+      softEllipsis(res)
+
+      // con poco testo sotto la foto, il blocco scende un filo per equilibrio
+      let lines = res.lines
+      if (L.kind === 'hero') {
+        const off = Math.floor(Math.max(0, CONTENT_BOTTOM - res.endY) * 0.3)
+        if (off > 8) lines = lines.map((l) => ({ ...l, y: l.y + off }))
+      }
+
+      drawPolaroid(ctx, img, photoCx, photoTop, L.photoW, L.photoH, tilt)
+      drawBodyLines(ctx, lines, { font, align })
+      break
     }
+  } else if (body) {
+    // solo testo: il carattere si adatta; breve → centrato, lungo → a bandiera
+    const sizes = [
+      [40, 56],
+      [37, 52],
+      [35, 49],
+      [33, 46],
+      [31, 43],
+    ]
+    let chosen
+    for (let i = 0; i < sizes.length; i++) {
+      const [px, lh] = sizes[i]
+      const res = layoutBody(ctx, body, {
+        font: bodyFont(px),
+        lineH: lh,
+        startY: contentTop + Math.round(lh * 0.9),
+        bottom: CONTENT_BOTTOM,
+        widthAt: () => ({ x: MARGIN + 20, width: CONTENT_W - 40 }),
+      })
+      chosen = { px, lh, res }
+      if (!res.overflow) break
+    }
+    softEllipsis(chosen.res)
+    const short = !chosen.res.overflow && chosen.res.lines.length <= 6
+    let lines = chosen.res.lines
+    if (short) {
+      // il blocco breve scende verso il centro della pagina, come una dedica
+      const off = Math.floor(Math.max(0, CONTENT_BOTTOM - chosen.res.endY) * 0.32)
+      lines = lines.map((l) => ({ ...l, y: l.y + off }))
+    }
+    drawBodyLines(ctx, lines, { font: bodyFont(chosen.px), align: short ? 'center' : 'left' })
+    if (short && lines.length) {
+      drawHeart(ctx, cx, lines[lines.length - 1].y + 54, 13, PALETTE.rosa, 0.5)
+    }
+  } else {
+    // pagina con solo il titolo: un piccolo ornamento al centro
+    drawHeart(ctx, cx, contentTop + availH * 0.42, 24, PALETTE.rosa, 0.45)
   }
 
   // numero di pagina
+  ctx.textAlign = 'center'
   ctx.fillStyle = PALETTE.inkSoft
   ctx.font = 'italic 400 32px "Cormorant Garamond"'
   ctx.fillText(`· ${pageNumber} ·`, cx, PAGE_H - 84)
