@@ -106,11 +106,13 @@ function Leaf({ index, isCover, frontTex, backTex, turned, zTarget }) {
   )
 }
 
-export function Book3D({ mode, spread, faceTextures, onCoverClick, editFaces, onEdit }) {
+export function Book3D({ mode, spread, faceTextures, onCoverClick, editFaces, onEdit, focusSide }) {
   const outerRef = useRef()
   const innerRef = useRef()
   const [hovered, setHovered] = useState(false)
   const { viewport, size } = useThree()
+  const prevSpreadRef = useRef(spread)
+  const flipFollowRef = useRef(0)
 
   const leavesCount = faceTextures.length / 2
   const thicknesses = useMemo(
@@ -152,17 +154,41 @@ export function Book3D({ mode, spread, faceTextures, onCoverClick, editFaces, on
         : clamp((viewport.height * 0.55) / PAGE_H, 0.5, 1.1)
       if (hovered) scale *= 1.05
     } else {
-      px = 0
-      py = isMobile ? 0.12 : 0
-      pz = 0.25
-      rx = -0.1
-      ry = 0
-      rz = 0
-      scale = clamp(
-        Math.min((viewport.width * 0.88) / (PAGE_W * 2), (viewport.height * 0.76) / PAGE_H),
-        0.4,
-        1.5
-      )
+      // sul telefono si legge una pagina alla volta: la vista si stringe
+      // sulla pagina a fuoco; quando il foglio gira, per un attimo si
+      // allarga sul libro intero per seguire la pagina che si sfoglia
+      const single = isMobile && focusSide
+      if (prevSpreadRef.current !== spread) {
+        if (single && prevSpreadRef.current > 0 && spread > 0) flipFollowRef.current = t + 1.05
+        prevSpreadRef.current = spread
+      }
+      const zoomed = single && t >= flipFollowRef.current
+
+      if (zoomed) {
+        scale = clamp(
+          Math.min((viewport.width * 0.94) / PAGE_W, (viewport.height * 0.8) / PAGE_H),
+          0.4,
+          2.4
+        )
+        px = (focusSide === 'left' ? 1 : -1) * (PAGE_W / 2) * scale
+        py = 0.02
+        pz = 0.25
+        rx = -0.05
+        ry = 0
+        rz = 0
+      } else {
+        px = 0
+        py = isMobile ? 0.12 : 0
+        pz = 0.25
+        rx = -0.1
+        ry = 0
+        rz = 0
+        scale = clamp(
+          Math.min((viewport.width * 0.88) / (PAGE_W * 2), (viewport.height * 0.76) / PAGE_H),
+          0.4,
+          1.5
+        )
+      }
     }
 
     const λ = 2.4

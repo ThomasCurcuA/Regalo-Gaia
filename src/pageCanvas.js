@@ -310,8 +310,10 @@ export function makeDedicationCanvas(dedication) {
 // ── pagina di un ricordo ──────────────────────────────────────
 // Il layout si adatta alla lunghezza del racconto: testo breve → foto
 // grande in alto; testo medio → foto panoramica; testo lungo → foto
-// più piccola di lato, con il testo che le scorre accanto. Se serve,
-// anche il carattere si riduce gradualmente: niente più righe tagliate.
+// più piccola di lato, con il testo che le scorre accanto (come i
+// layout di Word). Se serve, anche il carattere si riduce: niente
+// righe tagliate. La foto non viene mai ritagliata: la cornice della
+// polaroid si adatta alle sue proporzioni originali.
 
 const MARGIN = 120
 const CONTENT_W = PAGE_W - MARGIN * 2
@@ -329,7 +331,14 @@ function loadImage(src) {
 
 const bodyFont = (px) => `400 ${px}px "Cormorant Garamond"`
 
-// polaroid con ombra, leggera rotazione e ritaglio "cover" della foto
+// da dimensioni massime a dimensioni reali che rispettano le proporzioni
+function fitPhoto(img, maxW, maxH) {
+  const ratio = img.width / img.height
+  const w = Math.min(maxW, maxH * ratio)
+  return { photoW: Math.round(w), photoH: Math.round(w / ratio) }
+}
+
+// polaroid con ombra e leggera rotazione; la foto è intera, mai ritagliata
 function drawPolaroid(ctx, img, centerX, topY, photoW, photoH, tilt) {
   const frameW = photoW + 44
   const frameH = photoH + 70
@@ -342,20 +351,7 @@ function drawPolaroid(ctx, img, centerX, topY, photoW, photoH, tilt) {
   ctx.fillStyle = '#ffffff'
   ctx.fillRect(-frameW / 2, -frameH / 2, frameW, frameH)
   ctx.shadowColor = 'transparent'
-  const scale = Math.max(photoW / img.width, photoH / img.height)
-  const sw = photoW / scale
-  const sh = photoH / scale
-  ctx.drawImage(
-    img,
-    (img.width - sw) / 2,
-    (img.height - sh) / 2,
-    sw,
-    sh,
-    -photoW / 2,
-    -frameH / 2 + 22,
-    photoW,
-    photoH
-  )
+  ctx.drawImage(img, 0, 0, img.width, img.height, -photoW / 2, -frameH / 2 + 22, photoW, photoH)
   ctx.restore()
 }
 
@@ -474,29 +470,36 @@ export async function makeMemoryCanvas(memory, pageNumber) {
   const tiltSign = pageNumber % 2 ? -1 : 1
 
   if (img && !body) {
-    // solo foto: una grande polaroid verticale al centro dello spazio
-    const photoW = 620
-    const photoH = Math.max(320, Math.min(availH - 140, 730))
+    // solo foto: una grande polaroid al centro, con le proporzioni originali
+    const { photoW, photoH } = fitPhoto(img, 660, Math.max(320, availH - 150))
     const frameH = photoH + 70
     const top = contentTop + Math.max(0, (availH - frameH - 70) / 2)
     drawPolaroid(ctx, img, cx, top, photoW, photoH, tiltSign * 0.017)
     drawHeart(ctx, cx, top + frameH + 68, 15, PALETTE.rosa, 0.5)
   } else if (img) {
     // foto + racconto: si prova prima il layout con la foto più grande,
-    // poi via via quelli che lasciano più spazio al testo
+    // poi via via quelli che lasciano più spazio al testo. Le dimensioni
+    // sono limiti massimi: la foto ci entra intera, senza tagli.
+    const ratio = img.width / img.height
     const layouts = [
-      { kind: 'hero', photoW: 660, photoH: 495, px: 40, lh: 56 },
-      { kind: 'hero', photoW: 560, photoH: 400, px: 40, lh: 56 },
-      { kind: 'banner', photoW: CONTENT_W - 44, photoH: 300, px: 37, lh: 52 },
-      { kind: 'side', photoW: 380, photoH: 385, px: 36, lh: 50 },
-      { kind: 'side', photoW: 300, photoH: 310, px: 34, lh: 48 },
-      { kind: 'side', photoW: 300, photoH: 310, px: 32, lh: 45 },
+      { kind: 'hero', maxW: 660, maxH: 520, px: 40, lh: 56 },
+      { kind: 'hero', maxW: 560, maxH: 400, px: 40, lh: 56 },
     ]
+    // la fascia panoramica ha senso solo per foto davvero orizzontali
+    if (ratio >= 1.55) {
+      layouts.push({ kind: 'banner', maxW: CONTENT_W - 44, maxH: 470, px: 37, lh: 52 })
+    }
+    layouts.push(
+      { kind: 'side', maxW: 380, maxH: 540, px: 36, lh: 50 },
+      { kind: 'side', maxW: 310, maxH: 440, px: 34, lh: 48 },
+      { kind: 'side', maxW: 310, maxH: 440, px: 32, lh: 45 }
+    )
 
     for (let i = 0; i < layouts.length; i++) {
       const L = layouts[i]
-      const frameW = L.photoW + 44
-      const frameH = L.photoH + 70
+      const { photoW, photoH } = fitPhoto(img, L.maxW, L.maxH)
+      const frameW = photoW + 44
+      const frameH = photoH + 70
       const font = bodyFont(L.px)
       let widthAt, startY, photoTop, photoCx, tilt, align
 
@@ -541,7 +544,7 @@ export async function makeMemoryCanvas(memory, pageNumber) {
         if (off > 8) lines = lines.map((l) => ({ ...l, y: l.y + off }))
       }
 
-      drawPolaroid(ctx, img, photoCx, photoTop, L.photoW, L.photoH, tilt)
+      drawPolaroid(ctx, img, photoCx, photoTop, photoW, photoH, tilt)
       drawBodyLines(ctx, lines, { font, align })
       break
     }

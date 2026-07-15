@@ -2,7 +2,7 @@
 import { Sparkles, ContactShadows } from '@react-three/drei'
 import { Book3D } from './Book3D.jsx'
 
-export function Experience({ mode, spread, faceTextures, onCoverClick, editFaces, onEdit }) {
+export function Experience({ mode, spread, faceTextures, onCoverClick, editFaces, onEdit, focusSide }) {
   return (
     <>
       <ambientLight intensity={0.55} color="#e8d5ff" />
@@ -26,6 +26,7 @@ export function Experience({ mode, spread, faceTextures, onCoverClick, editFaces
         onCoverClick={onCoverClick}
         editFaces={editFaces}
         onEdit={onEdit}
+        focusSide={focusSide}
       />
 
       <ContactShadows position={[0, -1.35, 0]} opacity={0.4} scale={8} blur={2.6} far={2.4} color="#12071f" />

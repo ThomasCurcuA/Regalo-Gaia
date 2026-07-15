@@ -63,6 +63,18 @@ function useFaceTextures(memories, ready) {
   return textures
 }
 
+// sul telefono il libro mostra una pagina alla volta, zoomata
+function useIsPhone() {
+  const [isPhone, setIsPhone] = useState(() => window.matchMedia('(max-width: 760px)').matches)
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 760px)')
+    const onChange = (e) => setIsPhone(e.matches)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [])
+  return isPhone
+}
+
 function Landing({ visible }) {
   return (
     <div className={`landing ${visible ? '' : 'hidden'}`}>
@@ -85,6 +97,8 @@ export default function App() {
   const [mode, setMode] = useState('landing') // 'landing' | 'book'
   const [spread, setSpread] = useState(0)
   const [editingFace, setEditingFace] = useState(null)
+  const isPhone = useIsPhone()
+  const [focusSide, setFocusSide] = useState('left') // pagina a fuoco sul telefono
   const timerRef = useRef()
 
   const leavesCount = faceTextures ? faceTextures.length / 2 : 0
@@ -92,25 +106,45 @@ export default function App() {
 
   const openBook = useCallback(() => {
     setMode('book')
+    setFocusSide('left')
     clearTimeout(timerRef.current)
     timerRef.current = setTimeout(() => setSpread(1), 1000)
   }, [])
 
   const closeBook = useCallback(() => {
     setSpread(0)
+    setFocusSide('left')
     clearTimeout(timerRef.current)
     timerRef.current = setTimeout(() => setMode('landing'), 850)
   }, [])
 
   const turn = useCallback(
     (dir) => {
+      // sul telefono si avanza una pagina alla volta: prima quella di
+      // sinistra, poi quella di destra, poi si volta il foglio
+      if (isPhone) {
+        if (dir > 0) {
+          if (focusSide === 'left') setFocusSide('right')
+          else if (spread < maxSpread) {
+            setSpread(spread + 1)
+            setFocusSide('left')
+          }
+        } else {
+          if (focusSide === 'right') setFocusSide('left')
+          else if (spread > 1) {
+            setSpread(spread - 1)
+            setFocusSide('right')
+          }
+        }
+        return
+      }
       setSpread((s) => {
         const next = s + dir
         if (next < 1) return s
         return Math.min(next, maxSpread)
       })
     },
-    [maxSpread]
+    [isPhone, focusSide, spread, maxSpread]
   )
 
   // il numero di pagine può ridursi dopo un'eliminazione
@@ -205,6 +239,7 @@ export default function App() {
             onCoverClick={openBook}
             editFaces={editFaces}
             onEdit={setEditingFace}
+            focusSide={isPhone ? focusSide : null}
           />
         </Canvas>
       )}
@@ -215,7 +250,7 @@ export default function App() {
         <button
           className="nav-arrow left"
           onClick={() => turn(-1)}
-          disabled={spread <= 1}
+          disabled={spread <= 1 && (!isPhone || focusSide === 'left')}
           aria-label="Pagina precedente"
         >
           ‹
@@ -223,7 +258,7 @@ export default function App() {
         <button
           className="nav-arrow right"
           onClick={() => turn(1)}
-          disabled={spread >= maxSpread}
+          disabled={spread >= maxSpread && (!isPhone || focusSide === 'right')}
           aria-label="Pagina successiva"
         >
           ›
@@ -231,7 +266,9 @@ export default function App() {
 
         <div className="book-toolbar">
           <span className="page-indicator">
-            {spread} / {maxSpread}
+            {isPhone
+              ? `${spread * 2 - (focusSide === 'left' ? 1 : 0)} / ${maxSpread * 2}`
+              : `${spread} / ${maxSpread}`}
           </span>
           <div className="toolbar-sep" />
           <button className="toolbar-btn close" onClick={closeBook}>
